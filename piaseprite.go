@@ -1,5 +1,5 @@
-// Package goaseprite is an Aseprite JSON loader written in Golang.
-package goaseprite
+// Package piaseprite is an Aseprite JSON loader written in Golang.
+package piaseprite
 
 import (
 	"errors"
@@ -27,6 +27,7 @@ const (
 type Frame struct {
 	X, Y     int
 	Duration float32 // The duration of the frame in seconds.
+	W, H int 		 // The width and height of this particular frame.
 }
 
 // Slice represents a Slice (rectangle) that was defined in Aseprite and exported in the JSON file.
@@ -436,6 +437,8 @@ func Read(fileData []byte) *File {
 		frame := Frame{}
 		frame.X = int(frameData.Get("frame.x").Num)
 		frame.Y = int(frameData.Get("frame.y").Num)
+		frame.W = int(frameData.Get("frame.w").Num)
+		frame.H = int(frameData.Get("frame.h").Num)
 		frame.Duration = float32(frameData.Get("duration").Num) / 1000
 
 		ase.Frames = append(ase.Frames, frame)

@@ -1,4 +1,4 @@
-module github.com/solarlune/goaseprite
+module github.com/SuperPlumeria64/piaseprite
 
 go 1.14
 
