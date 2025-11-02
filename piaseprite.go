@@ -322,7 +322,7 @@ func (player *Player) CurrentFrame() (Frame, bool) {
 func (player *Player) CurrentFrameCoords() (int, int, int, int) {
 
 	if frame, ok := player.CurrentFrame(); ok {
-		return frame.X, frame.Y, frame.X + int(player.File.FrameWidth), frame.Y + int(player.File.FrameHeight)
+		return frame.X, frame.Y, frame.X + int(frame.W), frame.Y + int(frame.H)
 	}
 
 	return -1, -1, -1, -1
