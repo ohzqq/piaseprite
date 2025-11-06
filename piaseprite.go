@@ -28,6 +28,7 @@ type Frame struct {
 	X, Y     int
 	Duration float32 // The duration of the frame in seconds.
 	W, H int 		 // The width and height of this particular frame.
+	SrcX, SrcY int   // The frame's top-left coordinate inside the original canvas. 
 }
 
 // Slice represents a Slice (rectangle) that was defined in Aseprite and exported in the JSON file.
@@ -121,6 +122,40 @@ func (file *File) HasTag(tagName string) bool {
 	_, exists := file.TagByName(tagName)
 	return exists
 }
+
+type Rect struct{ X, Y, W, H int }
+
+func (file *File) SliceRect(sliceName string, frameIdx int) (Rect, bool) {
+    slice, ok := file.SliceByName(sliceName)
+    if !ok || slice.IsEmpty() { return Rect{}, false }
+
+    if frameIdx < 0 || frameIdx >= len(file.Frames) { return Rect{}, false }
+    fr := file.Frames[frameIdx]
+    key := pickSliceKeyForFrame(slice.Keys, frameIdx)
+
+    // Convert canvas bounds -> sheet rect
+    x := fr.X + (key.X - fr.SrcX)
+    y := fr.Y + (key.Y - fr.SrcY)
+    w, h := key.W, key.H
+
+    // Optional safety clamp
+    if x < 0 { w += x; x = 0 }
+    if y < 0 { h += y; y = 0 }
+    if x+w > int(file.Width)  { w = int(file.Width)  - x }
+    if y+h > int(file.Height) { h = int(file.Height) - y }
+    if w <= 0 || h <= 0 { return Rect{}, false }
+
+    return Rect{x, y, w, h}, true
+}
+
+func (file *File) SliceRectForTag(sliceName, tagName string, relFrame int) (Rect, bool) {
+    tag, ok := file.TagByName(tagName)
+    if !ok { return Rect{}, false }
+    idx := tag.Start + relFrame
+    if idx < tag.Start || idx > tag.End { idx = tag.Start }
+    return file.SliceRect(sliceName, idx)
+}
+
 
 // Player is an animation player for Aseprite files.
 type Player struct {
@@ -440,6 +475,8 @@ func Read(fileData []byte) *File {
 		frame.W = int(frameData.Get("frame.w").Num)
 		frame.H = int(frameData.Get("frame.h").Num)
 		frame.Duration = float32(frameData.Get("duration").Num) / 1000
+		frame.SrcX = int(frameData.Get("spriteSourceSize.x").Num)
+		frame.SrcY = int(frameData.Get("spriteSourceSize.y").Num)
 
 		ase.Frames = append(ase.Frames, frame)
 
@@ -498,4 +535,24 @@ func Read(fileData []byte) *File {
 
 	return ase
 
+}
+
+func pickSliceKeyForFrame(keys []SliceKey, frame int) SliceKey {
+    // exact
+    for _, k := range keys {
+        if int(k.Frame) == frame { return k }
+    }
+    // nearest previous
+    var best *SliceKey
+    bestFrame := -1
+    for i := range keys {
+        if int(keys[i].Frame) <= frame && int(keys[i].Frame) > bestFrame {
+            best = &keys[i]
+            bestFrame = int(keys[i].Frame)
+        }
+    }
+    if best != nil { return *best }
+    // fallback
+    if len(keys) > 0 { return keys[0] }
+    return SliceKey{} // caller should handle IsEmpty/zero
 }
