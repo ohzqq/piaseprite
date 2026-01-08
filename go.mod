@@ -1,4 +1,4 @@
-module github.com/SuperPlumeria64/piaseprite
+module github.com/ohzqq/piaseprite
 
 go 1.14
 
