@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	PlayForward  = "forward"  // PlayForward plays animations forward
-	PlayBackward = "reverse"  // PlayBackward plays animations backwards
-	PlayPingPong = "pingpong" // PlayPingPong plays animation forward then backward
+	PlayForward         = "forward"  // PlayForward plays animations forward
+	PlayBackward        = "reverse"  // PlayBackward plays animations backwards
+	PlayPingPong        = "pingpong" // PlayPingPong plays animation forward then backward
+	PlayPingPongReverse = `pingpong_reverse`
 )
 
 const (
@@ -26,9 +27,17 @@ const (
 // Frame contains timing and position information for the frame on the spritesheet.
 type Frame struct {
 	X, Y     int
+	W, H     int     // The width and height of this particular frame.
 	Duration float32 // The duration of the frame in seconds.
-	W, H int 		 // The width and height of this particular frame.
-	SrcX, SrcY int   // The frame's top-left coordinate inside the original canvas. 
+	Name     string  // The frame's name.
+	Index    int     // The frame's index, since we are reading a hash.
+	Trimmed  bool    // Whether or not the sprite has been trimmed.
+	Rotated  bool    // Whether or not the sprite has been rotated.
+	// The frame's top-left coordinate inside the original canvas.
+	// The sprite's trimmed size.
+	Src struct {
+		X, Y, W, H int
+	} `json:"spriteSourceSize"`
 }
 
 // Slice represents a Slice (rectangle) that was defined in Aseprite and exported in the JSON file.
@@ -126,36 +135,55 @@ func (file *File) HasTag(tagName string) bool {
 type Rect struct{ X, Y, W, H int }
 
 func (file *File) SliceRect(sliceName string, frameIdx int) (Rect, bool) {
-    slice, ok := file.SliceByName(sliceName)
-    if !ok || slice.IsEmpty() { return Rect{}, false }
+	slice, ok := file.SliceByName(sliceName)
+	if !ok || slice.IsEmpty() {
+		return Rect{}, false
+	}
 
-    if frameIdx < 0 || frameIdx >= len(file.Frames) { return Rect{}, false }
-    fr := file.Frames[frameIdx]
-    key := pickSliceKeyForFrame(slice.Keys, frameIdx)
+	if frameIdx < 0 || frameIdx >= len(file.Frames) {
+		return Rect{}, false
+	}
+	fr := file.Frames[frameIdx]
+	key := pickSliceKeyForFrame(slice.Keys, frameIdx)
 
-    // Convert canvas bounds -> sheet rect
-    x := fr.X + (key.X - fr.SrcX)
-    y := fr.Y + (key.Y - fr.SrcY)
-    w, h := key.W, key.H
+	// Convert canvas bounds -> sheet rect
+	x := fr.X + (key.X - fr.Src.X)
+	y := fr.Y + (key.Y - fr.Src.Y)
+	w, h := key.W, key.H
 
-    // Optional safety clamp
-    if x < 0 { w += x; x = 0 }
-    if y < 0 { h += y; y = 0 }
-    if x+w > int(file.Width)  { w = int(file.Width)  - x }
-    if y+h > int(file.Height) { h = int(file.Height) - y }
-    if w <= 0 || h <= 0 { return Rect{}, false }
+	// Optional safety clamp
+	if x < 0 {
+		w += x
+		x = 0
+	}
+	if y < 0 {
+		h += y
+		y = 0
+	}
+	if x+w > int(file.Width) {
+		w = int(file.Width) - x
+	}
+	if y+h > int(file.Height) {
+		h = int(file.Height) - y
+	}
+	if w <= 0 || h <= 0 {
+		return Rect{}, false
+	}
 
-    return Rect{x, y, w, h}, true
+	return Rect{x, y, w, h}, true
 }
 
 func (file *File) SliceRectForTag(sliceName, tagName string, relFrame int) (Rect, bool) {
-    tag, ok := file.TagByName(tagName)
-    if !ok { return Rect{}, false }
-    idx := tag.Start + relFrame
-    if idx < tag.Start || idx > tag.End { idx = tag.Start }
-    return file.SliceRect(sliceName, idx)
+	tag, ok := file.TagByName(tagName)
+	if !ok {
+		return Rect{}, false
+	}
+	idx := tag.Start + relFrame
+	if idx < tag.Start || idx > tag.End {
+		idx = tag.Start
+	}
+	return file.SliceRect(sliceName, idx)
 }
-
 
 // Player is an animation player for Aseprite files.
 type Player struct {
@@ -463,20 +491,26 @@ func Read(fileData []byte) *File {
 		return xv < yv
 	})
 
-	for _, key := range frameNames {
+	for i, key := range frameNames {
+		frame := Frame{}
+		frame.Name = key
+		frame.Index = i
 
 		frameName := key
 		frameName = strings.Replace(frameName, ".", `\.`, -1)
 		frameData := gjson.Get(json, "frames."+frameName)
 
-		frame := Frame{}
 		frame.X = int(frameData.Get("frame.x").Num)
 		frame.Y = int(frameData.Get("frame.y").Num)
 		frame.W = int(frameData.Get("frame.w").Num)
 		frame.H = int(frameData.Get("frame.h").Num)
 		frame.Duration = float32(frameData.Get("duration").Num) / 1000
-		frame.SrcX = int(frameData.Get("spriteSourceSize.x").Num)
-		frame.SrcY = int(frameData.Get("spriteSourceSize.y").Num)
+		frame.Trimmed = frameData.Get("frame.trimmed").Bool()
+		frame.Rotated = frameData.Get("frame.rotated").Bool()
+		frame.Src.X = int(frameData.Get("spriteSourceSize.x").Num)
+		frame.Src.Y = int(frameData.Get("spriteSourceSize.y").Num)
+		frame.Src.W = int(frameData.Get("spriteSourceSize.w").Num)
+		frame.Src.H = int(frameData.Get("spriteSourceSize.h").Num)
 
 		ase.Frames = append(ase.Frames, frame)
 
@@ -538,21 +572,27 @@ func Read(fileData []byte) *File {
 }
 
 func pickSliceKeyForFrame(keys []SliceKey, frame int) SliceKey {
-    // exact
-    for _, k := range keys {
-        if int(k.Frame) == frame { return k }
-    }
-    // nearest previous
-    var best *SliceKey
-    bestFrame := -1
-    for i := range keys {
-        if int(keys[i].Frame) <= frame && int(keys[i].Frame) > bestFrame {
-            best = &keys[i]
-            bestFrame = int(keys[i].Frame)
-        }
-    }
-    if best != nil { return *best }
-    // fallback
-    if len(keys) > 0 { return keys[0] }
-    return SliceKey{} // caller should handle IsEmpty/zero
+	// exact
+	for _, k := range keys {
+		if int(k.Frame) == frame {
+			return k
+		}
+	}
+	// nearest previous
+	var best *SliceKey
+	bestFrame := -1
+	for i := range keys {
+		if int(keys[i].Frame) <= frame && int(keys[i].Frame) > bestFrame {
+			best = &keys[i]
+			bestFrame = int(keys[i].Frame)
+		}
+	}
+	if best != nil {
+		return *best
+	}
+	// fallback
+	if len(keys) > 0 {
+		return keys[0]
+	}
+	return SliceKey{} // caller should handle IsEmpty/zero
 }
